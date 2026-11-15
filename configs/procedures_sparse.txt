@@ -1,0 +1,5 @@
+FUNCTION_NAME:sparse
+LOOP_ID:sparse#3;DESIRED:k_j
+LOOP_ID:sparse#4;DESIRED:none
+LOOP_ID:sparse#6;DESIRED:none
+END

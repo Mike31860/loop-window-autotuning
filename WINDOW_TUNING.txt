@@ -1,0 +1,151 @@
+Independent window-level tuning
+===============================
+
+The independent window driver is run-windows.sh. The legacy Java entry point
+run.sh remains available for the earlier section-based search. The current
+backend supports NAS BT's exact_rhs function; configs/procedures_BT_exact.txt
+selects its five outermost nests. Width two produces four independent searches:
+(#0,#1), (#1,#2), (#2,#3), (#3,#4), or L1-L2 through L4-L5 using one-based names.
+
+Each search starts from the same canonical serial BT sources. Only nests in the
+active window receive transformations. The objective is the median elapsed time
+of the entire interval from before its first nest through the end of its last
+nest, including intervening statements. No selected settings or timing cache
+are propagated between windows. Overlapping window times must not be added.
+
+Discovery, variant generation, and measurement
+---------------------------------------------
+1. On fresh serial source and in a separate compiler process for each probe,
+   discover applicable induction substitution (3), reduction analysis (2),
+   parallelization (1), and legal explicit interchange orders for each nest.
+   Disabled/original choice 0 is always retained. Discovery executes the compiler,
+   not the application. Preserve its reports, emitted source, and rejection
+   reasons. Induction requires a body change; parallelization requires emitted
+   OpenMP sites; reduction uses compiler applicability/annotation evidence.
+   Parallelization discovery includes privatization and a recognized reduction
+   prerequisite. Applicability describes this compiler's supported choices,
+   not every mathematically legal transformation.
+2. Generate the Cartesian product of those discovered choices, retaining a
+   separate settings dictionary for each nest. A variant is one complete
+   assignment within a window. Its count depends on discovery, not a fixed 64.
+   The original loop order uses 0; legal nonidentity orders use index strings
+   such as m_i_j_k. DESIRED:none, DESIRED:0, and DESIRED:auto enable discovery;
+   manually restricting orders through DESIRED is not currently supported.
+3. Regenerate each variant from serial input, verify transformation scope and
+   every requested emitted order, compile, verify NAS output, and measure the
+   whole window. Keep all variant records even when two settings emit the same
+   executable. Within each window, identical binary hashes reuse an existing
+   measurement and link to its provenance. Counts distinguish variants, unique
+   executables, cached variants, actual executions, and successful verifications.
+
+Inlining is fixed off; targeted alias analysis and privatization are fixed at 2.
+Global transformation passes are disabled. The directly compiled serial reference
+is eligible to win. The winner and serial reference receive fresh measurements
+after the search; these are reported separately from the selection measurements.
+If serial wins, the fresh serial measurement also serves as winner validation.
+
+For the current BT exact_rhs source, Cetus rejects interchange for L1 and L5 as
+complex-bound nests (grid_points[...] array bounds), and L2-L4 as imperfect
+nests. These are explicit compiler limitations, not proof that no legal reorder
+exists. Discovery records those reasons and retains only the original order;
+it does not force a permutation past the compiler's legality gates. The current
+source also has no applicable induction/reduction choice, leaving parallel on
+or off for each nest: four variants per two-nest window.
+
+Source and correctness checks
+-----------------------------
+Every window has an isolated serial snapshot, compiler, and measurement cache.
+Only exact_rhs.c is passed through Cetus. Other translation units are compiled
+once from serial sources and their unchanged object files are reused.
+
+Scope checks require five outermost nests, one correctly placed window timer
+pair, no OpenMP directives outside the window, unchanged outside loop bodies
+compared with Cetus's no-optimization representation, and unchanged serial input
+and object hashes. These are source-scope checks; GCC -O3 remains enabled for
+every build. Requested interchange orders must match the emitted order exactly.
+
+Every actual execution must report NAS Verification = SUCCESSFUL and one finite,
+positive window time. Invalid candidates are recorded and excluded. Discovery,
+preparation, and serial-reference failures stop the run. The runtime probe checks
+the requested OpenMP team size and records affinity. All raw application samples,
+compiler commands, sources, binaries, flags, transformation evidence, and source
+hashes are preserved.
+
+An isolated Cetus copy repairs per-invocation reduction strategy, targeted
+induction-mode initialization, and bounded explicit permutation application.
+Only three class entries change; unrelated methods and JAR entries are checked
+for preservation. Existing eligibility and dependence checks remain in force.
+The helper demonstrates the original failures and passes regressions including
+all 24 four-level permutations. The shared CETUS compiler is never modified.
+See compiler-patches/README.txt for details.
+
+Running on DARWIN
+-----------------
+Use a compute allocation with GCC 14.2.0, Java 8/JDK, and Python >= 3.9.
+From /lustre/parot/MiguelRosas/Paper_2026_Tunning:
+
+  workgroup -g parot --command @ -- sbatch \
+      TuningSystem/examples/bt_exact_rhs_windows.slurm \
+      "$PWD" "$PWD/Runs/Window-Level-Tuning/my_run"
+
+The Slurm example requests xlarge-mem, one task, 16 CPUs, and 16 GB. It runs all
+four searches sequentially, giving each program 16 OpenMP threads. It uses Class
+S, three execution samples per measured program, and ten exact_rhs repetitions.
+To run directly inside an equivalent allocation:
+
+  ./TuningSystem/run-windows.sh --config procedures_BT_exact --window-size 2 \
+      --class S --threads 16 --samples 3 --repetitions 10
+
+Omitting --output creates a unique UTC-stamped directory under
+Runs/Window-Level-Tuning/<timestamp>_BT_exact_rhs_S_w2_t16. Explicit --output must
+be new or empty. --window-index 1 through 4 selects one independent search.
+--paper-root overrides the inferred paper root.
+
+Structured artifacts
+--------------------
+Each run contains:
+
+  manifest.json             Parameters, allocation, affinity, toolchain, hashes
+  configuration.txt         Function/loop selection used for this run
+  results.json, summary.csv Independent window results and execution counts
+  logs/driver.log           Driver stdout and stderr
+  logs/allocation_environment.txt, submitted_job.slurm  Slurm wrapper evidence
+  window_01/ ... window_04/
+    backend/                Serial snapshot, objects, isolated compiler, logs
+    discovery/              Separate compiler probes and their evidence
+    eligibility.json        Per-nest choices, legal orders, rejection reasons
+    baseline/initial/       Initial direct serial reference
+    baseline/validation/    Fresh serial measurement
+    variants/variant_NNNNNN/ Flags, code, binary, transformation/scope proof,
+                             execution logs or cache source, evaluation record
+    selected/               Selected settings and fresh winner validation
+    history.json[l]         Every configuration, measurement, and decision
+    variants.csv            Search table for inspection
+    events.jsonl            Stage/decision timeline
+    progress.json           Current stage and execution counts
+    results.json            Complete independent-window result
+
+Failure status and diagnostics remain in the run directory. The supplied Slurm
+script preserves allocation details; submit with --output/--error to retain
+scheduler stdout/stderr in a chosen submission folder as well.
+
+Small-test interpretation
+-------------------------
+Class S is a functional test. exact_rhs initializes its output afresh, so the
+fixture repeats initialization before BT time stepping to resolve short times.
+Window times total the configured number of exact_rhs calls, not one invocation.
+NAS's standard Time in seconds field describes time stepping, not the measured
+initialization window. Three samples and tiny problem sizes do not establish
+paper-quality speedup, an adjacency advantage, or an interaction between nests.
+
+Local regression tests:
+
+  python3 -m unittest discover -s tests -v
+
+Audit artifacts after the four-window, 16-thread Class S smoke test:
+
+  python3 tests/verify_darwin_windows.py /absolute/path/to/run_directory
+
+The audit checks the discovered variant grid, saved numerical verification and
+timings, cache provenance and execution counts, transformation scope and orders,
+compiler regression evidence, source/binary hashes, and independent baselines.

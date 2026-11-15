@@ -1,0 +1,4 @@
+FUNCTION_NAME:kernel_2mm
+LOOP_ID:kernel_2mm#0;DESIRED:none
+LOOP_ID:kernel_2mm#1;DESIRED:none
+END

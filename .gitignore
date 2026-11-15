@@ -1,0 +1,8 @@
+# Generated build and runtime files.
+*.jar
+*.class
+__pycache__/
+*.py[cod]
+/build/
+/.build/
+.DS_Store
