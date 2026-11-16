@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from window_bt import (CandidateError, TIMER, cetus_flags, instrument_serial,
+from window_bt import (BTWindowEvaluator, CandidateError, TIMER, cetus_flags, instrument_serial,
                        outer_loop_spans, parse_window_time, validate_window,
-                       perfect_nest_order, parse_legal_orders)
+                       perfect_nest_order, parse_legal_orders, loop_order_structure)
 
 
 class BTWindowTests(unittest.TestCase):
@@ -97,6 +97,71 @@ class BTWindowTests(unittest.TestCase):
         perfect = "for(k=0;k<2;k++){for(j=0;j<3;j++){for(i=0;i<4;i++){a[k][j][i]=0;}}}"
         self.assertEqual(perfect_nest_order(perfect), ["k", "j", "i"])
         self.assertIsNone(perfect_nest_order(perfect.replace("for(j", "prepare();for(j")))
+
+    def test_loop_structure_preserves_branches_and_repeated_sibling_indices(self):
+        source = '''for (k=0;k<2;k++) {
+          prepare();
+          for (j=0;j<3;j++) {
+            for (i=0;i<4;i++) {
+              for (m=0;m<5;m++) { first(); }
+              between();
+              for (m=1;m<5;m++) { second(); }
+            }
+            for (i=1;i<3;i++) { other(); }
+          }
+        }'''
+        self.assertIsNone(perfect_nest_order(source))
+        self.assertEqual(loop_order_structure(source), [{"index": "k", "children": [
+            {"index": "j", "children": [
+                {"index": "i", "children": [
+                    {"index": "m", "children": []}, {"index": "m", "children": []}]},
+                {"index": "i", "children": []}]}]}])
+
+    def test_loop_structure_ignores_noncode_and_keeps_perfect_order(self):
+        source = '''/* for(fake=0;fake<2;fake++) { } */
+          #pragma cetus private(i,j)
+          for (int i=0;i<2;i++) {
+            const char *text = "for(fake=0;fake<2;fake++) { }";
+            #pragma omp parallel for
+            for (j=start(1,2);j<3;j++) { use(i,j); }
+          }
+          for (k=0;k<4;k++) { finish(); }
+        '''
+        self.assertEqual(loop_order_structure(source), [
+            {"index": "i", "children": [{"index": "j", "children": []}]},
+            {"index": "k", "children": []}])
+        perfect = "for(k=0;k<2;k++){for(j=0;j<3;j++){for(i=0;i<4;i++){use();}}}"
+        self.assertEqual(loop_order_structure(perfect), [{"index": "k", "children": [
+            {"index": "j", "children": [{"index": "i", "children": []}]}]}])
+
+    def test_loop_structure_rejects_unsupported_forms_instead_of_guessing(self):
+        for source in ("for (;;) { use(); }", "for (i=0;i<2;i++) use();",
+                       "for (i=0,j=0;i<2;i++) { use(); }",
+                       "for (i=0;i<2;i++) { while (ready()) { use(); } }",
+                       "for (i=0;i<2;i++) { do { use(); } while (ready()); }",
+                       "int i=0;"):
+            with self.subTest(source=source), self.assertRaises(CandidateError):
+                loop_order_structure(source)
+
+    def test_transformation_evidence_records_original_and_emitted_structures(self):
+        first = "for(i=0;i<2;i++){for(j=0;j<3;j++){a[i][j]=1;}}"
+        rest = "for(k=0;k<2;k++){use();}" * 4
+        reference = "void exact_rhs(void){" + first + rest + "}"
+        reordered = "for(j=0;j<3;j++){for(i=0;i<2;i++){a[i][j]=1;}}"
+        actual = "void exact_rhs(void){" + reordered + rest + "}"
+        evaluator = object.__new__(BTWindowEvaluator)
+        evaluator.discoveries = {"exact_rhs#0": {"options": {"loop_interchange": [0, "j_i"]}}}
+        configuration = {"exact_rhs#0": {"induction": 0, "parallelize-loops": 0,
+                                          "reduction": 0, "loop_interchange": "j_i"}}
+        evidence = evaluator._transformation_evidence(actual, reference, ["exact_rhs#0"],
+                                                       configuration)["exact_rhs#0"]
+        self.assertEqual(evidence["original_loop_structure"], [
+            {"index": "i", "children": [{"index": "j", "children": []}]}])
+        self.assertEqual(evidence["emitted_loop_structure"], [
+            {"index": "j", "children": [{"index": "i", "children": []}]}])
+        self.assertEqual(evidence["original_order"], ["i", "j"])
+        self.assertEqual(evidence["emitted_order"], ["j", "i"])
+        self.assertTrue(evidence["interchange_applied"])
 
 
 if __name__ == "__main__":

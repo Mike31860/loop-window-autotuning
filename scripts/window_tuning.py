@@ -172,19 +172,87 @@ def _write_text(path, value):
     temporary.replace(path)
 
 
+def _format_loop_structure(roots):
+    """Describe nesting without treating sequential siblings as nested loops."""
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("Loop-order evidence must contain at least one root")
+
+    def render(node):
+        if not isinstance(node, dict) or not isinstance(node.get("index"), str) or not re.fullmatch(
+                r"[A-Za-z_]\w*", node["index"]) or not isinstance(node.get("children"), list):
+            raise ValueError("Invalid loop-order structure")
+        children = [render(child) for child in node["children"]]
+        if not children:
+            return node["index"]
+        suffix = children[0] if len(children) == 1 else "(" + "; ".join(children) + ")"
+        return node["index"] + "_" + suffix
+
+    orders = [render(root) for root in roots]
+    return orders[0] if len(orders) == 1 else "(" + "; ".join(orders) + ")"
+
+
+def _selected_loop_orders(result):
+    """Use inline emitted evidence, with saved-artifact support for older runs."""
+    winner = result["winner_validation"]
+    inline = winner.get("loop_structures", {})
+    evidence = {} if all(loop in inline for loop in result["loop_ids"]) else winner.get("transformations", {})
+    if isinstance(evidence, (str, Path)):
+        path = Path(evidence)
+        evidence = json.loads(path.read_text()) if path.is_file() else {}
+    source_orders = None
+    orders = {}
+    for loop_id in result["loop_ids"]:
+        if loop_id in inline:
+            orders[loop_id] = _format_loop_structure(inline[loop_id])
+            continue
+        entry = evidence.get(loop_id, {})
+        if entry.get("emitted_loop_structure") is not None:
+            orders[loop_id] = _format_loop_structure(entry["emitted_loop_structure"])
+            continue
+        if entry.get("emitted_order"):
+            order = entry["emitted_order"]
+            if not isinstance(order, list) or any(not isinstance(index, str) or not re.fullmatch(
+                    r"[A-Za-z_]\w*", index) for index in order):
+                raise ValueError("Invalid saved loop order for " + loop_id)
+            orders[loop_id] = "_".join(order)
+            continue
+        source = winner.get("generated_c")
+        if source and Path(source).is_file() and re.fullmatch(r"exact_rhs#\d+", loop_id):
+            if source_orders is None:
+                from window_bt import loop_order_structure, outer_loop_spans
+                data = Path(source).read_bytes()
+                expected_hash = winner.get("source_sha256")
+                if expected_hash and hashlib.sha256(data).hexdigest() != expected_hash:
+                    raise ValueError("Saved generated source hash mismatch: " + str(source))
+                text = data.decode()
+                source_orders = {"exact_rhs#%d" % index: loop_order_structure(text[start:stop])
+                                 for index, (start, stop) in enumerate(outer_loop_spans(text))}
+            if loop_id in source_orders:
+                orders[loop_id] = _format_loop_structure(source_orders[loop_id])
+                continue
+        # Older successful evaluations already verified explicit requested orders.
+        requested = result["selected"]["configuration"][loop_id]["loop_interchange"]
+        if requested not in (0, "0"):
+            orders[loop_id] = str(requested)
+            continue
+        raise ValueError("Missing loop-order evidence for " + loop_id
+                         + "; retain its transformation record or generated source")
+    return orders
+
+
 def format_window_result(result):
     """Present selected per-nest settings with their fresh window measurements."""
     selected = result["selected"]["configuration"]
     winner = _valid_measurement(result["winner_validation"])
     serial = _valid_measurement(result["serial_validation"])
+    orders = _selected_loop_orders(result)
     lines = ["Window#%d:" % result["window_number"]]
     for loop_id in result["loop_ids"]:
         options = selected[loop_id]
         fields = [label + "=" + ("Off" if options[key] in (0, "0") else "On")
                   for label, key in (("Parallelization", "parallelize-loops"),
                                      ("Induction", "induction"), ("Reduction", "reduction"))]
-        order = options["loop_interchange"]
-        fields.append("LoopInterchange=" + ("Off" if order in (0, "0") else str(order)))
+        fields.append("LoopInterchange=" + orders[loop_id])
         lines.append("  %s : Opt : [%s]" % (loop_id, ", ".join(fields)))
     lines.extend([
         "  WindowExecutionTime = %.9f s" % winner["window_seconds"],
@@ -206,7 +274,8 @@ def format_results_text(completed, status="complete"):
         "Times are fresh-validation medians of whole-window elapsed time, in seconds.\n"
         "Times accumulate all function calls specified by Repetitions in each application execution.\n"
         "SpeedupVsSerial = SerialExecutionTime / WindowExecutionTime; greater than 1 is faster.\n"
-        "LoopInterchange=Off retains the original loop order.\n"
+        "LoopInterchange shows the actual outer-to-inner order, including the original order when retained.\n"
+        "Parentheses with semicolons list sibling loops in source order, e.g. k_j_(i_m; m).\n"
         "Each window starts independently from serial; window times must not be added.\n\n"
     ) % status
     body = "\n\n".join(format_window_result(result) for result in completed)

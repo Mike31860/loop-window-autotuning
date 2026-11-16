@@ -137,6 +137,65 @@ def perfect_nest_order(text):
         position = child
 
 
+def loop_order_structure(text):
+    """Return ordered for-loop trees, preserving repeated sibling nests.
+
+    Each node has an index and ordered children. Unlike perfect_nest_order,
+    this describes imperfect nests too; it does not establish interchange
+    eligibility. Unsupported loop forms fail explicitly rather than producing
+    a partial or guessed ordering.
+    """
+    masked = _mask(text)
+    masked = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*",
+                    lambda match: "".join("\n" if c == "\n" else " " for c in match.group()),
+                    masked, flags=re.M)
+    roots, stack = [], []
+    for keyword in re.finditer(r"\b(?:for|while|do)\b", masked):
+        start = keyword.start()
+        if keyword.group() != "for":
+            raise CandidateError("Loop-order reporting supports braced for loops only")
+        header = re.match(r"for\s*\(", masked[start:])
+        if header is None:
+            raise CandidateError("Cannot identify the for-loop header for order reporting")
+        paren = start + header.end() - 1
+        header_stop = _matching(masked, paren, "(", ")")
+        parts = masked[paren + 1:header_stop - 1].split(";")
+        initializer = re.fullmatch(r"\s*(?:int\s+)?([A-Za-z_]\w*)\s*=(?!=)\s*(.+?)\s*",
+                                   parts[0], flags=re.S)
+        if len(parts) != 3 or initializer is None:
+            raise CandidateError("Loop-order reporting requires a single initialized index")
+        # A comma at the top level initializes another index; commas inside a
+        # function call or array expression do not introduce a sibling index.
+        depth = 0
+        for character in initializer.group(2):
+            if character in "([{":
+                depth += 1
+            elif character in ")]}":
+                depth -= 1
+            elif character == "," and depth == 0:
+                raise CandidateError("Loop-order reporting requires a single initialized index")
+        body = header_stop
+        while body < len(masked) and masked[body].isspace():
+            body += 1
+        if body >= len(masked) or masked[body] != "{":
+            raise CandidateError("Loop-order reporting supports braced for loops only")
+        stop = _matching(masked, body, "{", "}")
+        while stack and start >= stack[-1][1]:
+            stack.pop()
+        node = {"index": initializer.group(1), "children": []}
+        if stack:
+            parent_body, parent_stop, parent = stack[-1]
+            if start <= parent_body or stop > parent_stop:
+                raise CandidateError("Cannot establish loop nesting for order reporting")
+            parent["children"].append(node)
+        else:
+            roots.append(node)
+        stack.append((body, stop, node))
+    if not roots:
+        raise CandidateError("Cannot identify any for loops for order reporting")
+    return roots
+
+
 def parse_legal_orders(output, loop_id, original_order):
     """Parse only the requested loop's legacy Cetus legal-permutation report."""
     pattern = (r"^\s*LoopName:\s*" + re.escape(loop_id)
@@ -474,6 +533,8 @@ int main(void) {
             ref_tokens = _normalized_loop(reference[ref_start:ref_stop])
             original_order = perfect_nest_order(self.serial_text[slice(*original_spans[index])])
             entry = {"original_order": original_order,
+                     "original_loop_structure": loop_order_structure(
+                         self.serial_text[slice(*original_spans[index])]),
                      "options": {option: [0] for option in CHOICES},
                      "evidence": {"reference": reference_record}}
             for option, enabled, label in (("induction", 3, "Induction"),
@@ -552,6 +613,8 @@ int main(void) {
             evidence[loop_id] = {
                 "requested": configuration[loop_id], "original_order": ref_order,
                 "emitted_order": order, "interchange_applied": order != ref_order,
+                "original_loop_structure": loop_order_structure(reference[ref_start:ref_stop]),
+                "emitted_loop_structure": loop_order_structure(text[start:stop]),
                 "parallel_directive_count": len(re.findall(r"^\s*#\s*pragma\s+omp\s+parallel\s+for\b", fragment, re.M)),
                 "reduction_clause_count": len(re.findall(r"^\s*#\s*pragma\s+omp\b[^\n]*\breduction\b", fragment, re.M)),
                 "normalized_code_changed": _normalized_loop(text[prefix:stop]) != _normalized_loop(reference[ref_prefix:ref_stop]),
@@ -634,6 +697,7 @@ int main(void) {
                           flags_path=str(destination / "flags.json"),
                           scope_proof=str(destination / "scope_proof.json"),
                           transformations=str(destination / "transformations.json"),
+                          loop_structures={loop: evidence[loop]["emitted_loop_structure"] for loop in loop_ids},
                           source_sha256=sha256(generated), executable_sha256=sha256(executable),
                           input_sha256=hashlib.sha256(self.serial_text.encode()).hexdigest())
             cache_key = (tuple(loop_ids), record["executable_sha256"])

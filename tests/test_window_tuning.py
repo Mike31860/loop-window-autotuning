@@ -16,6 +16,20 @@ import window_tuning as tuning
 LOOPS = ["exact_rhs#%d" % i for i in range(5)]
 
 
+def loop_structure(order):
+    children = []
+    for index in reversed(order.split("_")):
+        children = [{"index": index, "children": children}]
+    return children
+
+
+def report_result(loop_id, measurement):
+    return {"window_number": 1, "loop_ids": [loop_id],
+            "selected": {"configuration": tuning.serial_configuration([loop_id])},
+            "winner_validation": {"window_seconds": 1.0, **measurement},
+            "serial_validation": {"window_seconds": 2.0}}
+
+
 class CandidateFailure(Exception):
     pass
 
@@ -59,6 +73,10 @@ class FakeEvaluator:
             "executable": str(Path(artifact_dir) / "output"),
             "generated_c": str(Path(artifact_dir) / "exact_rhs.c"),
             "scope_proof": {"outside_window_unchanged": True},
+            "loop_structures": {
+                loop: loop_structure(configuration[loop]["loop_interchange"]
+                                     if configuration[loop]["loop_interchange"] else "k_j_i_m")
+                for loop in loop_ids},
         }
         if use_cache and not cache_hit:
             self.cache[binary] = str(Path(artifact_dir) / "evaluation.json")
@@ -152,7 +170,9 @@ class WindowTests(unittest.TestCase):
                 "measurement": {"window_seconds": 0.1}},
             "serial_baseline": {"window_seconds": 10.0},
             "winner_validation": {"window_seconds": 6.0, "samples": [5.0, 6.0, 7.0],
-                                  "repetitions": 10},
+                                  "repetitions": 10, "loop_structures": {
+                                      loops[0]: loop_structure("k_i_j"),
+                                      loops[1]: loop_structure("i_j_k")}},
             "serial_validation": {"window_seconds": 3.0, "samples": [2.0, 3.0, 4.0],
                                   "repetitions": 10},
             "search_window_speedup": 100.0, "validation_window_speedup": 0.5,
@@ -164,7 +184,7 @@ class WindowTests(unittest.TestCase):
         self.assertIn("  kernel_3mm#3 : Opt : [Parallelization=On, Induction=Off, "
                       "Reduction=On, LoopInterchange=k_i_j]", text)
         self.assertIn("  kernel_3mm#4 : Opt : [Parallelization=Off, Induction=On, "
-                      "Reduction=Off, LoopInterchange=Off]", text)
+                      "Reduction=Off, LoopInterchange=i_j_k]", text)
         # A promising search result can be slower during fresh validation.
         self.assertIn("WindowExecutionTime = 6.000000000 s", text)
         self.assertIn("SerialExecutionTime = 3.000000000 s", text)
@@ -174,6 +194,59 @@ class WindowTests(unittest.TestCase):
         self.assertIn("Samples = 3", text)
         self.assertIn("Repetitions = 10", text)
         self.assertEqual(result, before)
+
+    def test_text_report_preserves_ordered_and_repeated_sibling_loops(self):
+        structure = [{"index": "k", "children": [{"index": "j", "children": [
+            *loop_structure("i_m"), *loop_structure("i_m"), *loop_structure("m")]}]}]
+        result = report_result(LOOPS[1], {"loop_structures": {LOOPS[1]: structure}})
+        before = copy.deepcopy(result)
+        text = tuning.format_window_result(result)
+        self.assertIn("LoopInterchange=k_j_(i_m; i_m; m)]", text)
+        self.assertNotIn("LoopInterchange=Off", text)
+        self.assertEqual(result, before)
+
+    def test_text_report_reads_saved_transformation_order_evidence(self):
+        evidence = {LOOPS[0]: {"original_order": ["k", "j", "i", "m"],
+                               "emitted_order": ["k", "j", "i", "m"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "transformations.json"
+            path.write_text(json.dumps(evidence))
+            for saved in (evidence, str(path)):
+                with self.subTest(evidence_type=type(saved).__name__):
+                    result = report_result(LOOPS[0], {"transformations": saved})
+                    self.assertIn("LoopInterchange=k_j_i_m]", tuning.format_window_result(result))
+            # Inline metadata remains sufficient when old artifact paths are unavailable.
+            result["winner_validation"]["transformations"] = str(Path(tmp) / "missing.json")
+            result["winner_validation"]["loop_structures"] = {LOOPS[0]: loop_structure("k_j_i_m")}
+            self.assertIn("LoopInterchange=k_j_i_m]", tuning.format_window_result(result))
+
+    def test_text_report_recovers_imperfect_order_from_verified_saved_source(self):
+        source = '''void exact_rhs(void) {
+          for(k=0;k<2;k++){for(j=0;j<3;j++){a[k][j]=0;}}
+          for(k=0;k<2;k++){for(j=0;j<3;j++){
+            prepare();
+            for(i=0;i<4;i++){for(m=0;m<5;m++){a[k][j]+=m;}}
+            for(i=0;i<4;i++){a[k][j]+=i;}
+          }}
+          for(i=0;i<4;i++){b[i]=0;}
+          for(i=0;i<4;i++){c[i]=0;}
+          for(i=0;i<4;i++){d[i]=0;}
+        }'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generated_exact_rhs.c"
+            path.write_text(source)
+            result = report_result(LOOPS[1], {
+                "transformations": {LOOPS[1]: {"original_order": None, "emitted_order": None}},
+                "generated_c": str(path), "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+            self.assertIn("LoopInterchange=k_j_(i_m; i)]", tuning.format_window_result(result))
+            path.write_text(source.replace("prepare();", "changed();"))
+            with self.assertRaises(ValueError):
+                tuning.format_window_result(result)
+
+    def test_text_report_does_not_invent_missing_original_order(self):
+        result = report_result(LOOPS[0], {})
+        with self.assertRaisesRegex(ValueError, r"(?i)order|structure"):
+            tuning.format_window_result(result)
 
     def test_run_text_summary_saves_only_completed_windows_and_current_status(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from window_bt import (TIMER, _mask, _matching, _normalized_loop, outer_loop_spans,
-                       parse_window_time, perfect_nest_order)
+                       parse_window_time, perfect_nest_order, loop_order_structure)
 from window_tuning import (candidate_configurations, serial_configuration,
                            validate_eligibility, variant_count)
 
@@ -126,6 +126,14 @@ def audit_scope_and_orders(measurement, directory, loops):
             require(emitted == (str(requested).split("_") if requested not in (0, "0") else original_order),
                     "Requested loop order was not actually emitted")
             require(evidence["interchange_applied"] == (emitted != original_order), "Incorrect interchange application report")
+            if "emitted_loop_structure" in evidence or "loop_structures" in measurement:
+                structure = loop_order_structure(text[slice(*actual)])
+                require(evidence.get("emitted_loop_structure") == structure,
+                        "Recorded emitted loop structure disagrees with generated C")
+                require(evidence.get("original_loop_structure") == loop_order_structure(reference[slice(*original)]),
+                        "Recorded original loop structure disagrees with the reference")
+                require(measurement.get("loop_structures", {}).get(loop) == structure,
+                        "Inline loop-order evidence disagrees with generated C")
 
 
 def audit_measurement(measurement, directory, loops, manifest, input_hash, prior_measured, force_fresh=False):

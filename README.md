@@ -76,8 +76,8 @@ The text report uses full CETUS loop IDs and lists the selected settings separat
 
 ```text
 Window#1:
-  exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
-  exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+  exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_i_m]
+  exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_(i_(m; m); i; m; i_m; m)]
   WindowExecutionTime = 0.000701000 s
   SerialExecutionTime = 0.000701000 s
   SpeedupVsSerial = 1.000000x
@@ -85,7 +85,9 @@ Window#1:
   Repetitions = 10
 ```
 
-Times are fresh-validation medians in seconds, accumulated across the stated number of function repetitions per application execution. Speedup is serial time divided by selected-window time; values above 1 indicate a speedup and values below 1 indicate a slowdown. `LoopInterchange=Off` retains the original order; an enabled permutation is shown explicitly, such as `LoopInterchange=m_i_j_k`. Induction and reduction display On/Off, while their exact numeric levels remain in the JSON results. A run-level report contains completed windows and records whether the run is still running, complete, or failed.
+Times are fresh-validation medians in seconds, accumulated across the stated number of function repetitions per application execution. Speedup is serial time divided by selected-window time; values above 1 indicate a speedup and values below 1 indicate a slowdown. `LoopInterchange` always shows the actual outer-to-inner loop ordering, including the original ordering when interchange is disabled. Parentheses and semicolons preserve sibling loops in source order: `i_(m; m)` represents two separate `m` loops inside `i`. This notation describes imperfect nests without implying that they can be interchanged.
+
+New evaluation records embed the emitted structure in `loop_structures`, so reports remain portable with their JSON data. Older runs can recover orders from their saved transformation evidence and generated source; missing evidence is reported as an error rather than replaced with a guessed ordering. Numeric optimization levels, including `loop_interchange=0` for a disabled transformation, remain in the JSON configuration. Induction and reduction display On/Off in text. A run-level report contains completed windows and records whether the run is still running, complete, or failed.
 
 Run local regression tests from the repository directory:
 

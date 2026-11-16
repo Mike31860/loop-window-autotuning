@@ -131,8 +131,8 @@ Each run contains:
 The readable report uses each window's original number and full CETUS loop IDs:
 
   Window#1:
-    exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
-    exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+    exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_i_m]
+    exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_(i_(m; m); i; m; i_m; m)]
     WindowExecutionTime = 0.000701000 s
     SerialExecutionTime = 0.000701000 s
     SpeedupVsSerial = 1.000000x
@@ -142,10 +142,19 @@ The readable report uses each window's original number and full CETUS loop IDs:
 These example times are from the validated Class S run. Reported times always
 come from the fresh validation measurements, not search scores or tuning wall
 time. Speedup is serial time divided by selected-window time. Times accumulate
-all repetitions per application execution. Explicit interchange choices retain
-their complete index order, such as m_i_j_k; Off preserves the original order.
-Numeric optimization levels remain available in results.json. The aggregate
-text report includes completed windows and the current run status.
+all repetitions per application execution. LoopInterchange always shows the
+actual outer-to-inner order, including the retained original order when the
+transformation is disabled. Parentheses with semicolons preserve sibling loops
+in source order: i_(m; m) means two separate m loops inside i. This describes
+imperfect nests without claiming they are eligible for interchange.
+
+Evaluation records embed emitted loop_structures for portable reporting; each
+transformation record also contains original_loop_structure and
+emitted_loop_structure. Older runs require their saved transformation evidence
+or generated source to recover orders. Missing evidence produces an explicit
+error. Numeric optimization levels, including loop_interchange=0 when disabled,
+remain available in results.json. The aggregate text report includes completed
+windows and the current run status.
 
 Failure status and diagnostics remain in the run directory. The supplied Slurm
 script preserves allocation details; submit with --output/--error to retain
