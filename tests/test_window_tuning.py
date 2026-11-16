@@ -132,6 +132,69 @@ class WindowTests(unittest.TestCase):
                 self.assertEqual(final_candidate[loops[1]]["parallelize-loops"], 1)
                 self.assertFalse(calls[-1][3])
                 self.assertFalse(calls[-2][3])
+                text = (Path(tmp) / str(number) / "results.txt").read_text()
+                self.assertIn("Window#%d:" % number, text)
+                for loop in loops:
+                    self.assertIn("  " + loop + " : Opt : [", text)
+                self.assertIn("WindowExecutionTime = 4.000000000 s", text)
+                self.assertIn("SerialExecutionTime = 10.000000000 s", text)
+                self.assertIn("SpeedupVsSerial = 2.500000x", text)
+
+    def test_text_report_preserves_per_loop_settings_and_uses_fresh_window_times(self):
+        loops = ["kernel_3mm#3", "kernel_3mm#4"]
+        result = {
+            "window_number": 4, "loop_ids": loops,
+            "selected": {"id": "variant_000003", "kind": "cetus", "configuration": {
+                loops[0]: {"parallelize-loops": 1, "induction": 0,
+                           "reduction": 2, "loop_interchange": "k_i_j"},
+                loops[1]: {"parallelize-loops": 0, "induction": 3,
+                           "reduction": 0, "loop_interchange": 0}},
+                "measurement": {"window_seconds": 0.1}},
+            "serial_baseline": {"window_seconds": 10.0},
+            "winner_validation": {"window_seconds": 6.0, "samples": [5.0, 6.0, 7.0],
+                                  "repetitions": 10},
+            "serial_validation": {"window_seconds": 3.0, "samples": [2.0, 3.0, 4.0],
+                                  "repetitions": 10},
+            "search_window_speedup": 100.0, "validation_window_speedup": 0.5,
+            "elapsed_seconds": 999.0,
+        }
+        before = copy.deepcopy(result)
+        text = tuning.format_window_result(result)
+        self.assertIn("Window#4:", text)
+        self.assertIn("  kernel_3mm#3 : Opt : [Parallelization=On, Induction=Off, "
+                      "Reduction=On, LoopInterchange=k_i_j]", text)
+        self.assertIn("  kernel_3mm#4 : Opt : [Parallelization=Off, Induction=On, "
+                      "Reduction=Off, LoopInterchange=Off]", text)
+        # A promising search result can be slower during fresh validation.
+        self.assertIn("WindowExecutionTime = 6.000000000 s", text)
+        self.assertIn("SerialExecutionTime = 3.000000000 s", text)
+        self.assertIn("SpeedupVsSerial = 0.500000x", text)
+        summary = tuning.format_results_text([result])
+        self.assertRegex(summary.lower(), r"fresh[- ]validation.*median|median.*fresh[- ]validation")
+        self.assertIn("Samples = 3", text)
+        self.assertIn("Repetitions = 10", text)
+        self.assertEqual(result, before)
+
+    def test_run_text_summary_saves_only_completed_windows_and_current_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = tuning.search_window(LOOPS[3:5], FakeEvaluator(), directory / "window_04",
+                                          window_number=4)
+            for status in ("running", "failed", "complete"):
+                with self.subTest(status=status):
+                    tuning._run_summary(directory, {"samples": 3}, [result], status,
+                                        error={"message": "next window failed"} if status == "failed" else None)
+                    text = (directory / "results.txt").read_text()
+                    self.assertRegex(text, r"(?im)^(?:Run)?Status\s*[:=]\s*" + status + r"$")
+                    self.assertEqual(text.count("Window#"), 1)
+                    self.assertIn("Window#4:", text)
+                    self.assertIn("exact_rhs#3 : Opt : [", text)
+                    self.assertIn("exact_rhs#4 : Opt : [", text)
+                    self.assertIn("WindowExecutionTime = 4.000000000 s", text)
+                    self.assertIn("SpeedupVsSerial = 2.500000x", text)
+                    self.assertEqual(json.loads((directory / "results.json").read_text())["status"], status)
+            tuning._run_summary(directory, {}, [], "running")
+            self.assertNotIn("Window#", (directory / "results.txt").read_text())
 
     def test_discovered_choices_control_variant_count_and_legal_orders(self):
         loops = LOOPS[:2]

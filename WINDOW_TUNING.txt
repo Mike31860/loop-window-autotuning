@@ -107,6 +107,8 @@ Each run contains:
 
   manifest.json             Parameters, allocation, affinity, toolchain, hashes
   configuration.txt         Function/loop selection used for this run
+  results.txt               Full CETUS loop IDs, selected per-nest settings,
+                            fresh window/serial times and speedups
   results.json, summary.csv Independent window results and execution counts
   logs/driver.log           Driver stdout and stderr
   logs/allocation_environment.txt, submitted_job.slurm  Slurm wrapper evidence
@@ -124,6 +126,26 @@ Each run contains:
     events.jsonl            Stage/decision timeline
     progress.json           Current stage and execution counts
     results.json            Complete independent-window result
+    results.txt             The same readable format for this window alone
+
+The readable report uses each window's original number and full CETUS loop IDs:
+
+  Window#1:
+    exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+    exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+    WindowExecutionTime = 0.000701000 s
+    SerialExecutionTime = 0.000701000 s
+    SpeedupVsSerial = 1.000000x
+    Samples = 3
+    Repetitions = 10
+
+These example times are from the validated Class S run. Reported times always
+come from the fresh validation measurements, not search scores or tuning wall
+time. Speedup is serial time divided by selected-window time. Times accumulate
+all repetitions per application execution. Explicit interchange choices retain
+their complete index order, such as m_i_j_k; Off preserves the original order.
+Numeric optimization levels remain available in results.json. The aggregate
+text report includes completed windows and the current run status.
 
 Failure status and diagnostics remain in the run directory. The supplied Slurm
 script preserves allocation details; submit with --output/--error to retain

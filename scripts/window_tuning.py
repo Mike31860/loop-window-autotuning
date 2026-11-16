@@ -164,6 +164,55 @@ def _write_json(path, value):
     temporary.replace(path)
 
 
+def _write_text(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(value)
+    temporary.replace(path)
+
+
+def format_window_result(result):
+    """Present selected per-nest settings with their fresh window measurements."""
+    selected = result["selected"]["configuration"]
+    winner = _valid_measurement(result["winner_validation"])
+    serial = _valid_measurement(result["serial_validation"])
+    lines = ["Window#%d:" % result["window_number"]]
+    for loop_id in result["loop_ids"]:
+        options = selected[loop_id]
+        fields = [label + "=" + ("Off" if options[key] in (0, "0") else "On")
+                  for label, key in (("Parallelization", "parallelize-loops"),
+                                     ("Induction", "induction"), ("Reduction", "reduction"))]
+        order = options["loop_interchange"]
+        fields.append("LoopInterchange=" + ("Off" if order in (0, "0") else str(order)))
+        lines.append("  %s : Opt : [%s]" % (loop_id, ", ".join(fields)))
+    lines.extend([
+        "  WindowExecutionTime = %.9f s" % winner["window_seconds"],
+        "  SerialExecutionTime = %.9f s" % serial["window_seconds"],
+        "  SpeedupVsSerial = %.6fx" % (serial["window_seconds"] / winner["window_seconds"]),
+    ])
+    if "samples" in winner:
+        lines.append("  Samples = %d" % len(winner["samples"]))
+    if "repetitions" in winner:
+        lines.append("  Repetitions = %d" % winner["repetitions"])
+    return "\n".join(lines)
+
+
+def format_results_text(completed, status="complete"):
+    """Format completed windows without renumbering or combining their timings."""
+    header = (
+        "Independent window tuning results\n"
+        "Status = %s\n\n"
+        "Times are fresh-validation medians of whole-window elapsed time, in seconds.\n"
+        "Times accumulate all function calls specified by Repetitions in each application execution.\n"
+        "SpeedupVsSerial = SerialExecutionTime / WindowExecutionTime; greater than 1 is faster.\n"
+        "LoopInterchange=Off retains the original loop order.\n"
+        "Each window starts independently from serial; window times must not be added.\n\n"
+    ) % status
+    body = "\n\n".join(format_window_result(result) for result in completed)
+    return header + (body or "No completed windows.") + "\n"
+
+
 def _append_jsonl(path, value):
     with Path(path).open("a") as stream:
         stream.write(json.dumps(value, allow_nan=False) + "\n")
@@ -308,6 +357,7 @@ def _search_window(loop_ids, evaluator, directory, candidate_error_type, window_
     _write_variant_table(directory / "variants.csv", history)
     _write_json(directory / "selected/configuration.json", selected["configuration"])
     _write_json(directory / "results.json", result)
+    _write_text(directory / "results.txt", format_results_text([result]))
     _write_json(directory / "progress.json", {"phase": "complete", "completed_variants": total,
                 "total_variants": total, "selected_variant": selected["id"], "actual_execution_count": actual})
     _event(directory, "window_completed", selected_variant=selected["id"], actual_execution_count=actual)
@@ -318,6 +368,7 @@ def _search_window(loop_ids, evaluator, directory, candidate_error_type, window_
         "variants/: every requested configuration, generated code, executable and logs\n"
         "history.json / history.jsonl / variants.csv: evaluations, equivalence and decisions\n"
         "selected/: chosen per-loop configuration and fresh validation (serial uses baseline/validation)\n"
+        "results.txt: full CETUS loop IDs, selected settings, fresh window times and serial speedups\n"
         "results.json: complete window result; events.jsonl: stage and decision timeline\n"
         "All window times cover the full interval, including intervening statements.\n")
     print("Window %d complete: %s; %d variants, %d distinct executables, %d actual executions" %
@@ -395,6 +446,7 @@ def _run_summary(output, manifest, completed, status, error=None):
                              r["serial_validation"]["window_seconds"], r["winner_validation"]["window_seconds"],
                              r["validation_window_speedup"], r["selected"]["id"],
                              json.dumps(r["selected"]["configuration"], sort_keys=True)])
+    _write_text(output / "results.txt", format_results_text(completed, status))
 
 
 def main(argv=None):
@@ -456,6 +508,7 @@ def main(argv=None):
         "Independent eligibility-guided window tuning\n\n"
         "manifest.json: input, allocation, affinity, toolchain and exact source provenance\n"
         "configuration.txt: selected function and loop IDs\n"
+        "results.txt: selected per-loop settings, fresh window times and serial speedups\n"
         "results.json / summary.csv: independent window results and execution counts\n"
         "logs/driver.log: complete driver stdout and stderr\n"
         "window_NN/: eligibility evidence, baseline, variants, decisions, measurements and logs\n\n"

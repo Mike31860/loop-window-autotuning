@@ -70,7 +70,22 @@ This script uses DARWIN's `vpkg_require` environment and the `parot` account. Ad
 
 ## Results and verification
 
-Each run preserves parameters, toolchain and source provenance, per-nest eligibility evidence, configurations, generated code, executables, logs, correctness checks, timing samples, and selected settings. Start with `results.json`, `summary.csv`, and `logs/driver.log`. Each `window_NN/` contains its own discovery, baseline, variants, history, and selected result.
+Each run preserves parameters, toolchain and source provenance, per-nest eligibility evidence, configurations, generated code, executables, logs, correctness checks, timing samples, and selected settings. Start with `results.txt` for a readable report, `results.json` or `summary.csv` for structured data, and `logs/driver.log` for the run log. Each `window_NN/` contains its own discovery, baseline, variants, history, selected result, and `results.txt`.
+
+The text report uses full CETUS loop IDs and lists the selected settings separately for each nest. For example, the first window of the validated BT run is:
+
+```text
+Window#1:
+  exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+  exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off]
+  WindowExecutionTime = 0.000701000 s
+  SerialExecutionTime = 0.000701000 s
+  SpeedupVsSerial = 1.000000x
+  Samples = 3
+  Repetitions = 10
+```
+
+Times are fresh-validation medians in seconds, accumulated across the stated number of function repetitions per application execution. Speedup is serial time divided by selected-window time; values above 1 indicate a speedup and values below 1 indicate a slowdown. `LoopInterchange=Off` retains the original order; an enabled permutation is shown explicitly, such as `LoopInterchange=m_i_j_k`. Induction and reduction display On/Off, while their exact numeric levels remain in the JSON results. A run-level report contains completed windows and records whether the run is still running, complete, or failed.
 
 Run local regression tests from the repository directory:
 
