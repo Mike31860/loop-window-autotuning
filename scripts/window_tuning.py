@@ -251,8 +251,9 @@ def format_window_result(result):
         options = selected[loop_id]
         fields = [label + "=" + ("Off" if options[key] in (0, "0") else "On")
                   for label, key in (("Parallelization", "parallelize-loops"),
-                                     ("Induction", "induction"), ("Reduction", "reduction"))]
-        fields.append("LoopInterchange=" + orders[loop_id])
+                                     ("Induction", "induction"), ("Reduction", "reduction"),
+                                     ("LoopInterchange", "loop_interchange"))]
+        fields.append("LoopOrder=" + orders[loop_id])
         lines.append("  %s : Opt : [%s]" % (loop_id, ", ".join(fields)))
     lines.extend([
         "  WindowExecutionTime = %.9f s" % winner["window_seconds"],
@@ -274,7 +275,8 @@ def format_results_text(completed, status="complete"):
         "Times are fresh-validation medians of whole-window elapsed time, in seconds.\n"
         "Times accumulate all function calls specified by Repetitions in each application execution.\n"
         "SpeedupVsSerial = SerialExecutionTime / WindowExecutionTime; greater than 1 is faster.\n"
-        "LoopInterchange shows the actual outer-to-inner order, including the original order when retained.\n"
+        "LoopInterchange is On/Off for each nest's selected interchange setting.\n"
+        "LoopOrder shows the actual outer-to-inner order, including the original order when retained.\n"
         "Parentheses with semicolons list sibling loops in source order, e.g. k_j_(i_m; m).\n"
         "Each window starts independently from serial; window times must not be added.\n\n"
     ) % status

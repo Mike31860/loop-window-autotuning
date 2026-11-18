@@ -136,8 +136,8 @@ Each run contains:
 The readable report uses each window's original number and full CETUS loop IDs:
 
   Window#1:
-    exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_i_m]
-    exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=k_j_(i_(m; m); i; m; i_m; m)]
+    exact_rhs#0 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off, LoopOrder=k_j_i_m]
+    exact_rhs#1 : Opt : [Parallelization=Off, Induction=Off, Reduction=Off, LoopInterchange=Off, LoopOrder=k_j_(i_(m; m); i; m; i_m; m)]
     WindowExecutionTime = 0.000701000 s
     SerialExecutionTime = 0.000701000 s
     SpeedupVsSerial = 1.000000x
@@ -147,9 +147,10 @@ The readable report uses each window's original number and full CETUS loop IDs:
 These example times are from the validated Class S run. Reported times always
 come from the fresh validation measurements, not search scores or tuning wall
 time. Speedup is serial time divided by selected-window time. Times accumulate
-all repetitions per application execution. LoopInterchange always shows the
-actual outer-to-inner order, including the retained original order when the
-transformation is disabled. Parentheses with semicolons preserve sibling loops
+all repetitions per application execution. LoopInterchange shows On or Off for
+the selected interchange setting. LoopOrder shows the actual outer-to-inner
+order, including the retained original order when interchange is disabled.
+Parentheses with semicolons preserve sibling loops
 in source order: i_(m; m) means two separate m loops inside i. This describes
 imperfect nests without claiming they are eligible for interchange.
 

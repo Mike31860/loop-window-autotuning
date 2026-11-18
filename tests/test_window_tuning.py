@@ -172,7 +172,14 @@ class WindowTests(unittest.TestCase):
             "winner_validation": {"window_seconds": 6.0, "samples": [5.0, 6.0, 7.0],
                                   "repetitions": 10, "loop_structures": {
                                       loops[0]: loop_structure("k_i_j"),
-                                      loops[1]: loop_structure("i_j_k")}},
+                                      loops[1]: loop_structure("i_j_k")},
+                                  "transformations": {
+                                      loops[0]: {"original_order": ["i", "j", "k"],
+                                                 "emitted_order": ["k", "i", "j"],
+                                                 "interchange_applied": True},
+                                      loops[1]: {"original_order": ["i", "j", "k"],
+                                                 "emitted_order": ["i", "j", "k"],
+                                                 "interchange_applied": False}}},
             "serial_validation": {"window_seconds": 3.0, "samples": [2.0, 3.0, 4.0],
                                   "repetitions": 10},
             "search_window_speedup": 100.0, "validation_window_speedup": 0.5,
@@ -182,9 +189,9 @@ class WindowTests(unittest.TestCase):
         text = tuning.format_window_result(result)
         self.assertIn("Window#4:", text)
         self.assertIn("  kernel_3mm#3 : Opt : [Parallelization=On, Induction=Off, "
-                      "Reduction=On, LoopInterchange=k_i_j]", text)
+                      "Reduction=On, LoopInterchange=On, LoopOrder=k_i_j]", text)
         self.assertIn("  kernel_3mm#4 : Opt : [Parallelization=Off, Induction=On, "
-                      "Reduction=Off, LoopInterchange=i_j_k]", text)
+                      "Reduction=Off, LoopInterchange=Off, LoopOrder=i_j_k]", text)
         # A promising search result can be slower during fresh validation.
         self.assertIn("WindowExecutionTime = 6.000000000 s", text)
         self.assertIn("SerialExecutionTime = 3.000000000 s", text)
@@ -201,8 +208,8 @@ class WindowTests(unittest.TestCase):
         result = report_result(LOOPS[1], {"loop_structures": {LOOPS[1]: structure}})
         before = copy.deepcopy(result)
         text = tuning.format_window_result(result)
-        self.assertIn("LoopInterchange=k_j_(i_m; i_m; m)]", text)
-        self.assertNotIn("LoopInterchange=Off", text)
+        self.assertIn("LoopInterchange=Off, LoopOrder=k_j_(i_m; i_m; m)]", text)
+        self.assertNotIn("LoopOrder=Off", text)
         self.assertEqual(result, before)
 
     def test_text_report_reads_saved_transformation_order_evidence(self):
@@ -214,11 +221,11 @@ class WindowTests(unittest.TestCase):
             for saved in (evidence, str(path)):
                 with self.subTest(evidence_type=type(saved).__name__):
                     result = report_result(LOOPS[0], {"transformations": saved})
-                    self.assertIn("LoopInterchange=k_j_i_m]", tuning.format_window_result(result))
+                    self.assertIn("LoopInterchange=Off, LoopOrder=k_j_i_m]", tuning.format_window_result(result))
             # Inline metadata remains sufficient when old artifact paths are unavailable.
             result["winner_validation"]["transformations"] = str(Path(tmp) / "missing.json")
             result["winner_validation"]["loop_structures"] = {LOOPS[0]: loop_structure("k_j_i_m")}
-            self.assertIn("LoopInterchange=k_j_i_m]", tuning.format_window_result(result))
+            self.assertIn("LoopInterchange=Off, LoopOrder=k_j_i_m]", tuning.format_window_result(result))
 
     def test_text_report_recovers_imperfect_order_from_verified_saved_source(self):
         source = '''void exact_rhs(void) {
@@ -238,7 +245,7 @@ class WindowTests(unittest.TestCase):
             result = report_result(LOOPS[1], {
                 "transformations": {LOOPS[1]: {"original_order": None, "emitted_order": None}},
                 "generated_c": str(path), "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-            self.assertIn("LoopInterchange=k_j_(i_m; i)]", tuning.format_window_result(result))
+            self.assertIn("LoopInterchange=Off, LoopOrder=k_j_(i_m; i)]", tuning.format_window_result(result))
             path.write_text(source.replace("prepare();", "changed();"))
             with self.assertRaises(ValueError):
                 tuning.format_window_result(result)
