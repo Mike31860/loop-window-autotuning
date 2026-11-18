@@ -1,15 +1,97 @@
 """Regression checks for direct interval measurement and input isolation."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from window_bt import (BTWindowEvaluator, CandidateError, TIMER, cetus_flags, instrument_serial,
                        outer_loop_spans, parse_window_time, validate_window,
-                       perfect_nest_order, parse_legal_orders, loop_order_structure)
+                       perfect_nest_order, parse_legal_orders, loop_order_structure,
+                       repair_legacy_timer_bound)
 
 
 class BTWindowTests(unittest.TestCase):
+    @staticmethod
+    def legacy_timer_fixture():
+        names = ["t_timer_%d" % index for index in range(1, 22)]
+        names.append("TimeInstrument_Tuning_section_z_solve_S0")
+        header = "\n".join("#define %s %d" % (name, index)
+                           for index, name in enumerate(names, 1))
+        header += "\n#define t_last 23\n#define " + TIMER + " 63\n"
+        driver = "char *t_names[t_last+1];\n" + "\n".join(
+            't_names[%s] = "%s";' % (name, name) for name in names)
+        driver += '\nfor (i = 1; i <= t_last; i++) { printf("%s", t_names[i]); }\n'
+        return header, driver
+
+    def test_legacy_timer_bound_excludes_unnamed_23_and_preserves_timer_63(self):
+        header, driver = self.legacy_timer_fixture()
+        # These comments must not supply a name for the unused reporting slot.
+        header += "/* #define t_last 99 */\n"
+        driver += '/* t_names[t_last] = "unused"; */\n// t_names[t_last] = "unused";\n'
+        repaired = repair_legacy_timer_bound(header, driver)
+        self.assertEqual(repaired, header.replace("#define t_last 23", "#define t_last 22"))
+        self.assertIn("#define TimeInstrument_Tuning_section_z_solve_S0 22\n", repaired)
+        self.assertIn("#define " + TIMER + " 63\n", repaired)
+        self.assertEqual(repair_legacy_timer_bound(repaired, driver), repaired)
+
+    def test_legacy_timer_bound_rejects_gaps_unknown_constants_and_unexpected_bounds(self):
+        header, driver = self.legacy_timer_fixture()
+        assignment = 't_names[t_timer_11] = "t_timer_11";'
+        for invalid_header, invalid_driver in (
+                (header, driver.replace(assignment, "/* " + assignment + " */")),
+                (header, driver.replace("t_names[t_timer_11]", "t_names[unknown_timer]")),
+                (header.replace("#define t_last 23", "#define t_last 24"), driver),
+                (header + "#define t_unnamed 23\n", driver),
+                (header, driver.replace('"t_timer_11";', "NULL;"))):
+            with self.subTest(header=invalid_header, driver=invalid_driver), self.assertRaises(CandidateError):
+                repair_legacy_timer_bound(invalid_header, invalid_driver)
+
+    def test_application_timeout_requires_positive_integer_seconds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for timeout in (0, -1, True, 1.5, "600", None):
+                with self.subTest(timeout=timeout), self.assertRaisesRegex(ValueError, "Application timeout"):
+                    BTWindowEvaluator(root, root / "backend", application_timeout=timeout)
+            self.assertFalse((root / "backend").exists())
+
+    def test_configured_timeout_applies_to_every_application_sample(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cetus = root / "CETUS/cetus-tuning/bin/cetus"
+            cetus.parent.mkdir(parents=True)
+            cetus.touch()
+            with patch.object(BTWindowEvaluator, "_prepare"):
+                evaluator = BTWindowEvaluator(root, root / "backend", class_name="B", samples=4,
+                                              application_timeout=900)
+            evaluator.serial_text = "void exact_rhs(void){" + "for(i=0;i<2;i++){use(i);}" * 5 + "}"
+            evaluator.object_paths = []
+            loop_ids = ["exact_rhs#0", "exact_rhs#1"]
+            configuration = {loop: {"induction": 0, "parallelize-loops": 0,
+                                    "reduction": 0, "loop_interchange": 0} for loop in loop_ids}
+            timings = iter((4, 1, 3, 2))
+
+            def fake_run(command, cwd, log_prefix, **kwargs):
+                if Path(log_prefix).name.startswith("application_"):
+                    return "Verification = SUCCESSFUL\n" + TIMER + " = %d\n" % next(timings)
+                Path(command[command.index("-o") + 1]).write_bytes(b"compiled fixture")
+                return ""
+
+            with patch.object(evaluator, "_run", side_effect=fake_run) as run, \
+                    patch.object(evaluator, "_scope_proof", return_value={"passed": True}):
+                result = evaluator.evaluate(loop_ids, configuration, root / "evaluation", serial=True)
+
+            application_calls = [call for call in run.call_args_list
+                                 if Path(call.args[2]).name.startswith("application_")]
+            self.assertEqual(len(application_calls), 4)
+            self.assertTrue(all(call.kwargs["timeout"] == 900 for call in application_calls))
+            self.assertEqual(result["application_timeout_seconds"], 900)
+            self.assertEqual(result["status"], "valid")
+            self.assertEqual(result["verification_count"], 4)
+            self.assertEqual(result["samples"], [4, 1, 3, 2])
+            self.assertEqual(result["window_seconds"], 2.5)
+
     def test_timer_surrounds_whole_window_including_intervening_statements(self):
         source = '''void exact_rhs(void) {
           int i, j;

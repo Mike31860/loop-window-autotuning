@@ -136,7 +136,8 @@ def audit_scope_and_orders(measurement, directory, loops):
                         "Inline loop-order evidence disagrees with generated C")
 
 
-def audit_measurement(measurement, directory, loops, manifest, input_hash, prior_measured, force_fresh=False):
+def audit_measurement(measurement, directory, loops, manifest, input_hash, prior_measured,
+                      force_fresh=False, expected_class="S"):
     own = inside(measurement["evaluation_path"], directory)
     require(read(own) == measurement, "Evaluation record differs from history/results")
     require(measurement["status"] == "valid" and measurement["loop_ids"] == loops, "Invalid evaluation")
@@ -175,7 +176,8 @@ def audit_measurement(measurement, directory, loops, manifest, input_hash, prior
         output_path = own.parent / ("application_%d.out" % sample)
         output = output_path.read_text()
         require(re.search(r"^\s*Verification\s*=\s*SUCCESSFUL\s*$", output, re.M), "NAS verification failed")
-        require(re.search(r"^\s*Class\s*=\s*S\s*$", output, re.M), "Application did not run BT Class S")
+        require(re.search(r"^\s*Class\s*=\s*" + re.escape(expected_class) + r"\s*$", output, re.M),
+                "Application did not run BT Class " + expected_class)
         require(parse_window_time(output) == expected, "Stored timing differs from raw output")
         command = read(output_path.with_suffix(".json"))
         require(command["returncode"] == 0 and not command.get("timed_out"), "Application command failed")
@@ -184,12 +186,13 @@ def audit_measurement(measurement, directory, loops, manifest, input_hash, prior
     return sample_count
 
 
-def verify(root, expected_threads=16, expected_partition="xlarge-mem"):
+def verify(root, expected_threads=16, expected_partition="xlarge-mem", expected_class="S"):
+    require(expected_class in ("S", "W", "A", "B", "C"), "Unsupported NAS BT class")
     root = Path(root).resolve()
     report, manifest = read(root / "results.json"), read(root / "manifest.json")
     require(report["status"] == "complete" and report["manifest"] == manifest, "Run did not complete")
-    require(manifest["mode"] == "independent-eligible-window-tuning" and manifest["class"] == "S" and
-            manifest["window_size"] == 2 and manifest["threads"] == expected_threads, "Unexpected smoke-test configuration")
+    require(manifest["mode"] == "independent-eligible-window-tuning" and manifest["class"] == expected_class and
+            manifest["window_size"] == 2 and manifest["threads"] == expected_threads, "Unexpected run configuration")
     environment = manifest["provenance"]["environment"]
     require(environment.get("SLURM_JOB_PARTITION") == expected_partition, "Wrong Slurm partition")
     require(int(environment.get("SLURM_CPUS_PER_TASK", 0)) == expected_threads, "Wrong requested CPUs per task")
@@ -212,8 +215,9 @@ def verify(root, expected_threads=16, expected_partition="xlarge-mem"):
         require(previous_finished is None or previous_finished <= started[0], "Window searches overlapped")
         previous_finished = finished[0]
         snapshot = read(directory / "backend/serial_snapshot.json")
-        require(snapshot["class"] == "S" and snapshot["threads"] == expected_threads and
-                snapshot["verified_openmp_team_size"] == expected_threads, "OpenMP did not provide the requested team")
+        require(snapshot["class"] == expected_class and snapshot["threads"] == expected_threads and
+                snapshot["verified_openmp_team_size"] == expected_threads,
+                "Snapshot class or OpenMP team does not match the request")
         require(snapshot["repetitions"] == manifest["exact_rhs_repetitions"], "Repetition count changed")
         require(re.search(r"^OPENMP_TEAM_SIZE=%d$" % expected_threads,
                           (directory / "backend/prepare/openmp_probe_run.out").read_text(), re.M), "Missing runtime thread-count evidence")
@@ -242,7 +246,7 @@ def verify(root, expected_threads=16, expected_partition="xlarge-mem"):
             measurement = record["measurement"]
             require(measurement["configuration"] == record["configuration"], "Applied configuration differs from variant")
             window_runs += audit_measurement(measurement, directory, loops, manifest, input_hash, seen,
-                                             force_fresh=record["kind"] == "serial")
+                                             force_fresh=record["kind"] == "serial", expected_class=expected_class)
             hashes.add(measurement["executable_sha256"])
         require(result["serial_baseline"] == history[0]["measurement"], "Serial baseline differs from history")
         expected_best = min(history, key=lambda r: r["measurement"]["window_seconds"])
@@ -256,7 +260,8 @@ def verify(root, expected_threads=16, expected_partition="xlarge-mem"):
         require(result["winner_validation"]["configuration"] == result["selected"]["configuration"], "Winner replay used different settings")
         for measurement in validation:
             require(Path(measurement["evaluation_path"]).resolve() not in seen, "Validation reused a previous evaluation artifact")
-            window_runs += audit_measurement(measurement, directory, loops, manifest, input_hash, seen, force_fresh=True)
+            window_runs += audit_measurement(measurement, directory, loops, manifest, input_hash, seen,
+                                             force_fresh=True, expected_class=expected_class)
         require(result["actual_execution_count"] == result["verified_execution_count"] == window_runs,
                 "Actual versus inherited execution counts are incorrect")
         require(result["cached_variant_count"] == sum(r["measurement"]["cache_hit"] for r in history[1:]), "Wrong cache-hit count")
@@ -290,6 +295,7 @@ def verify(root, expected_threads=16, expected_partition="xlarge-mem"):
             "Aggregate counts disagree with audited executions")
     summary = {"status": "passed", "windows": rows, "variant_count": total_variants,
                "verified_application_executions": total_runs, "threads": expected_threads,
+               "class": expected_class, "samples": manifest["samples"],
                "partition": expected_partition, "sequential_windows": True,
                "serial_exact_rhs_sha256": next(iter(inputs)), "compiler_sha256": next(iter(compilers)),
                "note": "Independent functional experiments; cached timings are not counted as new executions."}
@@ -302,5 +308,6 @@ if __name__ == "__main__":
     parser.add_argument("run_root", type=Path)
     parser.add_argument("--threads", type=int, default=16)
     parser.add_argument("--partition", default="xlarge-mem")
+    parser.add_argument("--class", dest="class_name", choices=("S", "W", "A", "B", "C"), default="S")
     args = parser.parse_args()
-    print(json.dumps(verify(args.run_root, args.threads, args.partition), indent=2))
+    print(json.dumps(verify(args.run_root, args.threads, args.partition, args.class_name), indent=2))

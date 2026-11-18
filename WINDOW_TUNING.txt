@@ -58,6 +58,11 @@ Every window has an isolated serial snapshot, compiler, and measurement cache.
 Only exact_rhs.c is passed through Cetus. Other translation units are compiled
 once from serial sources and their unchanged object files are reused.
 
+The isolated fixture repairs the legacy timer-report limit: the benchmark has
+names for timers 1 through 22, but its original t_last is 23. Limiting the report
+to initialized names avoids reading an uninitialized pointer. The separate
+window timer remains slot 63. Original benchmark files are preserved.
+
 Scope checks require five outermost nests, one correctly placed window timer
 pair, no OpenMP directives outside the window, unchanged outside loop bodies
 compared with Cetus's no-optimization representation, and unchanged serial input

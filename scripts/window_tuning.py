@@ -531,6 +531,8 @@ def main(argv=None):
     parser.add_argument("--samples", type=_positive_integer, default=3)
     parser.add_argument("--repetitions", type=_positive_integer, default=10,
                         help="Repeat exact_rhs initialization to resolve short window timings (default: 10)")
+    parser.add_argument("--application-timeout", type=_positive_integer, default=120,
+                        help="Maximum seconds for each full benchmark execution (default: 120)")
     args = parser.parse_args(argv)
     config = Path(args.config)
     if config.parent == Path("."):
@@ -570,7 +572,8 @@ def main(argv=None):
                 "window_size": args.window_size, "windows_requested": [
                     {"number": number, "loops": members} for number, members in selected_windows],
                 "class": args.class_name, "threads": args.threads, "samples": args.samples,
-                "exact_rhs_repetitions": args.repetitions, "fixed_cetus_options": FIXED_OPTIONS,
+                "exact_rhs_repetitions": args.repetitions, "application_timeout_seconds": args.application_timeout,
+                "fixed_cetus_options": FIXED_OPTIONS,
                 "command_line": list(sys.argv[1:] if argv is None else argv), "provenance": _provenance(tuning_root)}
     _write_json(output / "manifest.json", manifest)
     (output / "README.txt").write_text(
@@ -595,7 +598,8 @@ def main(argv=None):
             for number, members in selected_windows:
                 window_dir = output / ("window_%02d" % number)
                 evaluator = BTWindowEvaluator(paper_root, window_dir / "backend", class_name=args.class_name,
-                                             threads=args.threads, samples=args.samples, repetitions=args.repetitions)
+                                             threads=args.threads, samples=args.samples, repetitions=args.repetitions,
+                                             application_timeout=args.application_timeout)
                 completed.append(search_window(members, evaluator, window_dir, CandidateError, number))
                 _run_summary(output, manifest, completed, "running")
             _run_summary(output, manifest, completed, "complete")

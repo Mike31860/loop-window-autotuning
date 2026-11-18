@@ -52,6 +52,45 @@ def _mask(text):
     return _LEXICAL.sub(lambda m: "".join("\n" if c == "\n" else " " for c in m.group()), text)
 
 
+def repair_legacy_timer_bound(header, driver):
+    """Exclude an unused trailing timer from BT's inclusive named-timer report."""
+    definitions = {}
+    for match in re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+([^\n]+)$", _mask(header), re.M):
+        definitions.setdefault(match.group(1), []).append(match.group(2).strip())
+
+    def timer_id(name):
+        values = definitions.get(name, [])
+        if len(values) != 1 or not re.fullmatch(r"[0-9]+", values[0]):
+            raise CandidateError("Cannot resolve legacy timer constant: " + name)
+        return int(values[0])
+
+    # Retain strings while masking comments so commented-out names cannot make
+    # an uninitialized reporting slot appear safe.
+    driver_code = _LEXICAL.sub(
+        lambda m: _mask(m.group()) if m.group().startswith(("/*", "//")) else m.group(), driver)
+    assignments = re.findall(r'\bt_names\s*\[([^\]]+)\]\s*=\s*("(?:\\.|[^"\\])*")\s*;', driver_code)
+    assignment_count = len(re.findall(r"\bt_names\s*\[[^\]]+\]\s*=(?!=)", _mask(driver)))
+    if not assignments or len(assignments) != assignment_count:
+        raise CandidateError("Cannot establish initialized legacy timer names")
+    named_ids = [timer_id(name.strip()) for name, _ in assignments]
+    last = max(named_ids)
+    if last >= 63 or sorted(named_ids) != list(range(1, last + 1)):
+        raise CandidateError("Legacy timer names must initialize every slot from 1 through t_last")
+    declared_ids = {timer_id(name) for name in definitions
+                    if (name.startswith("t_") and name != "t_last") or
+                    (name.startswith("TimeInstrument_Tuning_section_") and name != TIMER)}
+    if declared_ids != set(named_ids):
+        raise CandidateError("Legacy timer constants and initialized names disagree")
+    previous = timer_id("t_last")
+    if previous not in (last, last + 1):
+        raise CandidateError("Unexpected legacy timer reporting bound")
+    bound = re.search(r"^[ \t]*#[ \t]*define[ \t]+t_last[ \t]+([0-9]+)", _mask(header), re.M)
+    if bound is None:
+        raise CandidateError("Cannot locate the legacy timer reporting bound")
+    # Only the isolated header's bound changes; slot 63 is reported separately.
+    return header[:bound.start(1)] + str(last) + header[bound.end(1):]
+
+
 def _matching(text, start, opening, closing):
     depth = 0
     for pos in range(start, len(text)):
@@ -292,15 +331,19 @@ def cetus_flags(loop_ids, configuration):
 
 
 class BTWindowEvaluator:
-    def __init__(self, paper_root, output_dir, class_name="S", threads=2, samples=3, repetitions=1000):
+    def __init__(self, paper_root, output_dir, class_name="S", threads=2, samples=3, repetitions=1000,
+                 application_timeout=120):
         self.paper_root = Path(paper_root).expanduser().resolve()
         self.output_dir = Path(output_dir).expanduser().resolve()
         if class_name not in ("S", "W", "A", "B", "C"):
             raise ValueError("Unsupported NAS BT class")
         if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in (threads, samples, repetitions)):
             raise ValueError("Threads, samples and repetitions must be positive integers")
+        if isinstance(application_timeout, bool) or not isinstance(application_timeout, int) or application_timeout < 1:
+            raise ValueError("Application timeout must be a positive integer in seconds")
         self.class_name, self.threads = class_name, threads
         self.samples, self.repetitions = samples, repetitions
+        self.application_timeout = application_timeout
         self.cetus = self.paper_root / "CETUS/cetus-tuning/bin/cetus"
         self.snapshot = self.output_dir / "serial_snapshot"
         self.objects = self.output_dir / "serial_objects"
@@ -383,7 +426,8 @@ class BTWindowEvaluator:
         header = app / "header.h"
         if TIMER in header.read_text():
             raise CandidateError("The canonical BT header already defines the window timer")
-        header.write_text(header.read_text() + "\n#define " + TIMER + " 63\n")
+        header.write_text(repair_legacy_timer_bound(header.read_text(), (app / "bt.c").read_text())
+                          + "\n#define " + TIMER + " 63\n")
         timers = (self.snapshot / "common/c_timers.c").read_text()
         if not re.search(r"start\s*\[64\].*elapsed\s*\[64\]", timers):
             raise CandidateError("Cannot establish that timer slot 63 is available")
@@ -449,7 +493,8 @@ int main(void) {
             "timer_label": TIMER, "cflags": list(CFLAGS), "threads": self.threads,
             "verified_openmp_team_size": self.runtime_threads,
             "process_cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
-            "fixture_edits": ["Reserve timer 63", "Include timer prototypes in exact_rhs",
+            "fixture_edits": ["Bound legacy timer reporting by the highest initialized name (t_last=22)",
+                              "Reserve timer 63", "Include timer prototypes in exact_rhs",
                               "Repeat exact_rhs initialization and print the accumulated window time"],
             "environment": {k: self.env.get(k) for k in ("SLURM_JOB_ID", "SLURM_JOB_NODELIST", "SLURM_CPUS_PER_TASK", "OMP_NUM_THREADS", "OMP_DYNAMIC", "OMP_PROC_BIND", "OMP_PLACES")},
         })
@@ -665,6 +710,7 @@ int main(void) {
         record = {"loop_ids": list(loop_ids), "configuration": configuration,
                   "serial": serial, "objective": "whole_window_elapsed_seconds",
                   "repetitions": self.repetitions, "threads": self.threads,
+                  "application_timeout_seconds": self.application_timeout,
                   "actual_execution_count": 0, "execution_count": 0, "verification_count": 0,
                   "inherited_verification_count": 0, "cache_hit": False, "cached": False,
                   "measured": False, "evaluation_path": str(destination / "evaluation.json")}
@@ -714,7 +760,8 @@ int main(void) {
                 for sample in range(self.samples):
                     record["actual_execution_count"] += 1
                     record["execution_count"] += 1
-                    output = self._run([executable], app, destination / ("application_" + str(sample + 1)), timeout=120)
+                    output = self._run([executable], app, destination / ("application_" + str(sample + 1)),
+                                       timeout=self.application_timeout)
                     if not re.search(r"^\s*Verification\s*=\s*SUCCESSFUL\s*$", output, re.M):
                         raise CandidateError("NAS numerical verification failed in sample " + str(sample + 1))
                     record["verification_count"] += 1

@@ -58,6 +58,8 @@ Inside a compute allocation, from `PAPER_ROOT`:
   --class S --window-size 2 --threads 16 --samples 3 --repetitions 10
 ```
 
+For larger inputs, set `--class B` and increase `--application-timeout` (seconds per full benchmark execution) and the allocation walltime using a measured serial execution. The default application timeout is 120 seconds. `--samples 4` measures each executable four times and uses the median, averaging the two middle values. Every sample runs all BT time steps and numerical verification; `--repetitions` only repeats the timed `exact_rhs` initialization.
+
 On DARWIN, the supplied Slurm script requests `xlarge-mem`, one task, 16 CPUs, and 16 GB, and runs the four windows sequentially:
 
 ```bash
